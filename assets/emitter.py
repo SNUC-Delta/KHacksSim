@@ -1,6 +1,6 @@
 from typing import List
 from datetime import datetime
-from config_loader import load_config, Vehicle
+# from config_loader import load_config, Vehicle
 from abc import ABC
 import time
 
@@ -21,7 +21,7 @@ def make_data_dict(odometer, speed, fuel_level, acceleration, engine_rpm, seatbe
         "tyre_pressure": tyre_pressure,
     }
 
-def convert_vehicle_config_to_car(carla_id: int, vehicle: Vehicle) -> 'Car':
+def convert_vehicle_config_to_car(carla_id: int, vehicle) -> 'Car':
     car = Car(
         carla_id,
         vehicle.vehicle_id,
@@ -45,7 +45,7 @@ def convert_vehicle_config_to_car(carla_id: int, vehicle: Vehicle) -> 'Car':
 
 
 class Car:
-    def __init__(self, id, friendly_id, type, frequency_config)) -> None:
+    def __init__(self, id, friendly_id, type, frequency_config) -> None:
         self.id = id
         self.type = type
         self.type_speific_fields = ['ev_charging', 'ev_battery', 'oil_life', 'fuel_level']
@@ -127,6 +127,27 @@ class ConsoleEmitter(Emitter):
     def emit(self, vehicle_id, data):
         print(f"Vehicle {vehicle_id} emitted {data}")
 
+class CSVFileEmitter(Emitter):
+    def __init__(self, file_path) -> None:
+        self.file_path = file_path
+        self.headers = ["vehicle_id", "timestamp", "vehicle_type", "odometer", "speed", "fuel_level", "acceleration", "engine_rpm", "seatbelt_status", "ignition", "ev_charging", "ev_battery", "oil_life", "tyre_pressure"]
+        # add headers to the file
+        with open(self.file_path, "w") as f:
+            f.write(",".join(self.headers) + "\n")
+
+    def emit(self, vehicle_id, data, **kwargs):
+        """
+            Form csv row and append to file
+        """
+
+        data["vehicle_id"] = kwargs.get("vehicle_id", "")
+        data["vehicle_type"] = kwargs.get("vehicle_type", "")
+        data["timestamp"] = time.time()
+        print(f"Vehicle {vehicle_id} emitted {data}")
+        csv = ",".join([str(data.get(key, "")) for key in self.headers]) + "\n"
+        with open(self.file_path, "a") as f:
+            f.write(csv)
+
 
 class DataEmitter:
     def __init__(self, cars: List[Car], emitter: Emitter) -> None:
@@ -151,30 +172,32 @@ class DataEmitter:
     def iter(self):
         for car in self.cars.values():
             for key, value in car.data.items():
-                if (timme.time() - car.last_emmited[key]).microseconds >= car.frequencies[key] :
+                if (time.time() - car.last_emmited[key]) >= car.frequencies[key] :
                     if key in car.type_speific_fields and (not key in car.self_fields):
-                        print("Type mismatch. Vehicle of type", car.type, "tried emmitting", key)
+                        # print("Type mismatch. Vehicle of type", car.type, "tried emmitting", key)
+                        pass
                     else:
-                        self.emitter.emit(car.id, car.return_emitable(key, value))
+                        self.emitter.emit(car.id, car.return_emitable(key, value), vehicle_type=car.type)
                         car.last_emmited[key] = time.time()
 
 
-def emitter_tester():
-    feet_config = load_config()
-    cars = [convert_vehicle_config_to_car(index, vehicle) for index, vehicle in enumerate(feet_config.vehicles)]
-    emitter = ConsoleEmitter()
-    data_emitter = DataEmitter(cars, emitter)
-    i = 1
-    while True:
-        print(f"Tick {i}")
-        data_emitter.push(0, {"odometer": 100+i})
-        data_emitter.push(0, {"ev_battery": 100+i})
-        data_emitter.push(1, {"ev_battery": 100+i})
-        data_emitter.push(1, {"odometer": 100+i})
-        data_emitter.iter()
-        i+=1
-        time.sleep(1)
-
 
 if __name__ == "__main__":
+    from config_loader import load_config, Vehicle
+
+    def emitter_tester():
+        feet_config = load_config("E:\CARLA\WindowsNoEditor\KHacksSim\config.yaml")
+        cars = [convert_vehicle_config_to_car(index, vehicle) for index, vehicle in enumerate(feet_config.vehicles)]
+        emitter = CSVFileEmitter("emitter_test.csv")
+        data_emitter = DataEmitter(cars, emitter)
+        i = 1
+        while True:
+            print(f"Tick {i}")
+            data_emitter.push(0, {"odometer": 100+i})
+            data_emitter.push(0, {"ev_battery": 100+i})
+            data_emitter.push(1, {"ev_battery": 100+i})
+            data_emitter.push(1, {"odometer": 100+i})
+            data_emitter.iter()
+            i+=1
+            time.sleep(1)
     emitter_tester()
