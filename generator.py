@@ -13,7 +13,8 @@ from assets.airbag import airbag_deployed
 from assets.seatbelt import is_seatbelt_on
 from assets.fuel import calculate_fuel_consumption, predict_engine_oil_life, ignition_probability
 from assets.battery import get_new_battery_capacity, convert_capacity_to_battery_percent
-
+from assets.config_loader import load_config
+from assets.emitter import convert_vehicle_config_to_car, make_data_dict
 import carla
 
 from carla import VehicleLightState as vls
@@ -22,7 +23,7 @@ import argparse
 import logging
 from numpy import random
 
-from assets.emitter import DataEmitter, ConsoleEmitter, make_data_dict, Car
+from assets.emitter import DataEmitter, ConsoleEmitter, CSVFileEmitter, make_data_dict, Car
 
 
 def get_actor_blueprints(world, filter, generation):
@@ -79,10 +80,11 @@ class GenerateTraffic():
 
     def make_cars(self):
         print(f"Making Cars: {self.number_of_vehicles}")
-        feet_config = load_config()
+        feet_config = load_config("E:\CARLA\WindowsNoEditor\KHacksSim\config.yaml")
+        feet_config.vehicles[0].type
         self.cars = cars = [convert_vehicle_config_to_car(index, vehicle) for index, vehicle in enumerate(feet_config.vehicles)]
         print(f"Made {len(self.cars)} cars")
-        self.data_emitter = DataEmitter(self.cars, ConsoleEmitter())
+        self.data_emitter = DataEmitter(self.cars, CSVFileEmitter(file_path=f"testing_data/emitter_vehicle_data_{time.time()}.csv"))
 
     def set_synchronous_mode(self, world, fixed_delta_seconds=0.2):
         """Configure the simulation to run in synchronous mode."""
@@ -285,181 +287,187 @@ class GenerateTraffic():
             # Example of how to use Traffic Manager parameters
             traffic_manager.global_percentage_speed_difference(10.0)
 
-            with open('vehicle_data_2.csv', 'w', newline='') as csvfile:
-                fieldnames = ["gear", "throttle", "speed", "acceleration", "max_rpm", "gear_ratio", "wheel_radius",
-                              "engine_rpm", "inclination"]
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            # with open('vehicle_data_2.csv', 'w', newline='') as csvfile:
+            #     fieldnames = ["gear", "throttle", "speed", "acceleration", "max_rpm", "gear_ratio", "wheel_radius",
+            #                   "engine_rpm", "inclination"]
+            #     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
-                # Write header row to CSV file
-                writer.writeheader()
+            #     # Write header row to CSV file
+            #     writer.writeheader()
 
                 # Main loop
-                current_time = time.time()
-                arr = []
-                airbags = [False] * len(vehicles_list)
-                prev_accel = [0] * len(vehicles_list)
-                prev_locations = [0] * len(vehicles_list)
-                odometer_readings = [0] * len(vehicles_list)
-                fuel_readings = [0] * len(vehicles_list)
-                max_battery_capacities = [random.randint(70, 120) for _ in range(len(vehicles_list))]
-                max_battery_capacities = list(
-                    map(lambda x: x * 1000, max_battery_capacities))  # convert to watt hours form kilowatt hours
-                current_battery_capacities = max_battery_capacities.copy()
-                prev_nonzero_speed = time.time()
-                prev_zero_speed = time.time()
-                # while count < 20:
-                destroyed = []
-                while (tick_time := time.time()) < current_time + 60:
-                    t1_start = time.perf_counter()
-                    if not self.asynch and synchronous_master:
-                        world.tick()
-                        world.tick()
-                        world.tick()
-                        world.tick()
+            current_time = time.time()
+            arr = []
+            airbags = [False] * len(vehicles_list)
+            prev_accel = [0] * len(vehicles_list)
+            prev_locations = [0] * len(vehicles_list)
+            odometer_readings = [0] * len(vehicles_list)
+            fuel_readings = [0] * len(vehicles_list)
+            max_battery_capacities = [random.randint(70, 120) for _ in range(len(vehicles_list))]
+            max_battery_capacities = list(
+                map(lambda x: x * 1000, max_battery_capacities))  # convert to watt hours form kilowatt hours
+            current_battery_capacities = max_battery_capacities.copy()
+            prev_nonzero_speed = time.time()
+            prev_zero_speed = time.time()
+            # while count < 20:
+            destroyed = []
+            while (tick_time := time.time()) < current_time + 60:
+                t1_start = time.perf_counter()
+                if not self.asynch and synchronous_master:
+                    world.tick()
+                    world.tick()
+                    world.tick()
+                    world.tick()
 
-                        all_vehicle_actors = world.get_actors(vehicles_list)
-                        for id, i in enumerate(all_vehicle_actors):
-                            torque_curve_data = []
-                            try:
-                                physics = i.get_physics_control()
-                                control = i.get_control()
-                                velocity = i.get_velocity()
-                                acceleration = i.get_acceleration()
-                                i_transform = i.get_transform()
-                                location = i.get_location()
-                            except:
-                                continue
-
-                            for vector in physics.torque_curve:
-                                x_value = vector.x
-                                y_value = vector.y
-                                torque_curve_data.append((x_value, y_value))
-
-                            gear = control.gear
-                            throttle = control.throttle
-                            speed = velocity.length()
-
-                            # Destroying dormant vehicle
-                            if throttle > 0.5 and speed < 0.1:
-                                i.destroy()
-
-                            if round(speed) > 0.5:
-                                prev_nonzero_speed = time.time()
-                            if round(speed) < 0.5:
-                                prev_zero_speed = time.time()
-                            uptime = int(time.time() - prev_zero_speed)
-                            stopped_for = int(time.time() - prev_nonzero_speed)
-                            wearing_seatbelt = is_seatbelt_on(uptime, stopped_for)
-                            acceleration = acceleration.length()
-                            max_rpm = physics.max_rpm
-                            final_drive_ratio = physics.final_ratio
-                            try:
-                                gear_ratio = physics.forward_gears[gear].ratio
-                            except IndexError:
-                                gear_ratio = physics.forward_gears[0].ratio
-
-                            wheel_radius = physics.wheels[0].radius / 100
-                            engine_rpm = calculate_engine_rpm(gear, gear_ratio, final_drive_ratio, speed, wheel_radius)
-                            rotation = i_transform.rotation
-                            inclination = get_vehicle_inclination(rotation)
-                            airbags_deployed_bool = airbag_deployed(prev_accel[id], acceleration)
-                            if airbags_deployed_bool:
-                                airbags[id] = True
-                            prev_accel[id] = acceleration
-
-                            if prev_locations[id] == 0:
-                                prev_locations[id] = i.get_location()
-
-                            # calculate distances travelled
-                            distance_travelled = location.distance(prev_locations[id])
-                            prev_locations[id] = location
-                            odometer_readings[id] += distance_travelled
-
-                            mass = physics.mass
-                            drag_coefficient = physics.drag_coefficient
-                            moi = physics.moi
-                            fuel_consumed = calculate_fuel_consumption(mass, acceleration, speed, engine_rpm,
-                                                                       distance_travelled, drag_coefficient, moi)
-                            fuel_readings[id] += fuel_consumed
-                            # ignition_status = ignition_probability(speed, stopped_for)
-                            ignition_status = True if speed > 0.1 else False
-                            engine_oil_life = predict_engine_oil_life(changed_odometer=odometer_readings[id],
-                                                                      initial_odometer=0, oil_change_interval=4500)
-                            new_battery_capacity = get_new_battery_capacity(max_battery_capacities,
-                                                                            current_battery_capacities, id, 1 / 3600)
-                            current_battery_capacities[id] = new_battery_capacity
-                            new_battery_percent = convert_capacity_to_battery_percent(max_battery_capacities, id,
-                                                                                      new_battery_capacity)
-
-                            wheel_friction = [physics.wheels[i].tire_friction for i in range(4)]
-
-                            # print("Timestamp: ", tick_time)
-                            # print("Vehicle ID: ", id)
-                            # print("Current Time:", time.time())
-                            # print("Gear: ", gear)
-                            # print("Throttle: ", throttle)
-                            # print("Speed: ", speed)
-                            # print("Acceleration: ", acceleration)
-                            # print("Max RPM: ", max_rpm)
-                            # print("Gear Ratio: ", gear_ratio)
-                            # print("Wheel Radius: ", wheel_radius)
-                            # print("Engine RPM: ", engine_rpm)
-                            # print("Inclination: ", inclination)
-                            # print("Airbags Deployed: ", airbags_deployed_bool)
-                            # print("============")
-                            to_add = {
-                                "car_weight": mass,
-                                "timestamp": tick_time,
-                                "vehicle_id": id,
-                                "gear": gear,
-                                "throttle": throttle,
-                                "speed": speed,
-                                "acceleration": acceleration,
-                                "max_rpm": max_rpm,
-                                "gear_ratio": gear_ratio,
-                                "wheel_radius": wheel_radius,
-                                "engine_rpm": engine_rpm,
-                                "inclination": inclination,
-                                "tyre_pressure": (0, 0, 0, 0),
-                                "tyre_friction": wheel_friction,
-                                "odometer": odometer_readings[id],
-                                "fuel_consumed": fuel_readings[id],
-                                "ignition_status": ignition_status,
-                                "engine_oil_life": engine_oil_life,
-                                "new_battery_percent": new_battery_percent,
-                                "seatbelt_status": wearing_seatbelt,
-                            }
-                            payload = make_data_dict(
-                                odometer_readings[id],
-                                speed,
-                                fuel_readings[id],
-                                acceleration,
-                                engine_rpm,
-                                wearing_seatbelt,
-                                ignition_status,
-                                "yes",
-                                new_battery_percent,
-                                0,
-                                (0, 0, 0, 0)
-                            )
-                            self.data_emitter.push(id, payload)
-                            arr.append(to_add)
-                        print("----")
-                        self.data_emitter.iter()
-                        t1_stop = time.perf_counter()
+                    all_vehicle_actors = world.get_actors(vehicles_list)
+                    for id, i in enumerate(all_vehicle_actors):
+                        torque_curve_data = []
                         try:
-                            time.sleep(1 - (t1_stop - t1_start))
-                        except ValueError:
-                            print("Value Error")
-                            pass
-                    else:
-                        world.wait_for_tick()
+                            physics = i.get_physics_control()
+                            control = i.get_control()
+                            velocity = i.get_velocity()
+                            acceleration = i.get_acceleration()
+                            i_transform = i.get_transform()
+                            location = i.get_location()
+                        except:
+                            continue
 
-                df = pd.DataFrame(arr)
-                df.to_csv('../vehicle_data.csv', index=False)
+                        for vector in physics.torque_curve:
+                            x_value = vector.x
+                            y_value = vector.y
+                            torque_curve_data.append((x_value, y_value))
+
+                        gear = control.gear
+                        throttle = control.throttle
+                        speed = velocity.length()
+
+                        # Destroying dormant vehicle
+                        if throttle > 0.5 and speed < 0.1:
+                            i.destroy()
+
+                        if round(speed) > 0.5:
+                            prev_nonzero_speed = time.time()
+                        if round(speed) < 0.5:
+                            prev_zero_speed = time.time()
+                        uptime = int(time.time() - prev_zero_speed)
+                        stopped_for = int(time.time() - prev_nonzero_speed)
+                        wearing_seatbelt = is_seatbelt_on(uptime, stopped_for)
+                        acceleration = acceleration.length()
+                        max_rpm = physics.max_rpm
+                        final_drive_ratio = physics.final_ratio
+                        try:
+                            gear_ratio = physics.forward_gears[gear].ratio
+                        except IndexError:
+                            gear_ratio = physics.forward_gears[0].ratio
+
+                        wheel_radius = physics.wheels[0].radius / 100
+                        engine_rpm = calculate_engine_rpm(gear, gear_ratio, final_drive_ratio, speed, wheel_radius)
+                        rotation = i_transform.rotation
+                        inclination = get_vehicle_inclination(rotation)
+                        airbags_deployed_bool = airbag_deployed(prev_accel[id], acceleration)
+                        if airbags_deployed_bool:
+                            airbags[id] = True
+                        prev_accel[id] = acceleration
+
+                        if prev_locations[id] == 0:
+                            prev_locations[id] = i.get_location()
+
+                        # calculate distances travelled
+                        distance_travelled = location.distance(prev_locations[id])
+                        prev_locations[id] = location
+                        odometer_readings[id] += distance_travelled
+
+                        mass = physics.mass
+                        drag_coefficient = physics.drag_coefficient
+                        moi = physics.moi
+                        fuel_consumed = calculate_fuel_consumption(mass, acceleration, speed, engine_rpm,
+                                                                    distance_travelled, drag_coefficient, moi)
+                        fuel_readings[id] += fuel_consumed
+                        # ignition_status = ignition_probability(speed, stopped_for)
+                        ignition_status = True if speed > 0.1 else False
+                        engine_oil_life = predict_engine_oil_life(changed_odometer=odometer_readings[id],
+                                                                    initial_odometer=0, oil_change_interval=4500)
+                        new_battery_capacity = get_new_battery_capacity(max_battery_capacities,
+                                                                        current_battery_capacities, id, 1 / 3600)
+                        current_battery_capacities[id] = new_battery_capacity
+                        new_battery_percent = convert_capacity_to_battery_percent(max_battery_capacities, id,
+                                                                                    new_battery_capacity)
+
+                        wheel_friction = [physics.wheels[i].tire_friction for i in range(4)]
+
+                        # print("Timestamp: ", tick_time)
+                        # print("Vehicle ID: ", id)
+                        # print("Current Time:", time.time())
+                        # print("Gear: ", gear)
+                        # print("Throttle: ", throttle)
+                        # print("Speed: ", speed)
+                        # print("Acceleration: ", acceleration)
+                        # print("Max RPM: ", max_rpm)
+                        # print("Gear Ratio: ", gear_ratio)
+                        # print("Wheel Radius: ", wheel_radius)
+                        # print("Engine RPM: ", engine_rpm)
+                        # print("Inclination: ", inclination)
+                        # print("Airbags Deployed: ", airbags_deployed_bool)
+                        # print("============")
+                        to_add = {
+                            "car_weight": mass,
+                            "timestamp": tick_time,
+                            "vehicle_id": id,
+                            "gear": gear,
+                            "throttle": throttle,
+                            "speed": speed,
+                            "acceleration": acceleration,
+                            "max_rpm": max_rpm,
+                            "gear_ratio": gear_ratio,
+                            "wheel_radius": wheel_radius,
+                            "engine_rpm": engine_rpm,
+                            "inclination": inclination,
+                            "tyre_pressure": (0, 0, 0, 0),
+                            "tyre_friction": wheel_friction,
+                            "odometer": odometer_readings[id],
+                            "fuel_consumed": fuel_readings[id],
+                            "ignition_status": ignition_status,
+                            "engine_oil_life": engine_oil_life,
+                            "new_battery_percent": new_battery_percent,
+                            "seatbelt_status": wearing_seatbelt,
+                        }
+                        payload = make_data_dict(
+                            odometer_readings[id],
+                            speed,
+                            fuel_readings[id],
+                            acceleration,
+                            engine_rpm,
+                            wearing_seatbelt,
+                            ignition_status,
+                            "yes",
+                            new_battery_percent,
+                            0,
+                            (0, 0, 0, 0)
+                        )
+                        self.data_emitter.push(id, payload)
+                        arr.append(to_add)
+                    print("----")
+                    self.data_emitter.iter()
+                    t1_stop = time.perf_counter()
+                    try:
+                        print("Time taken: ", t1_stop - t1_start)
+                        print("Sleeping for: ", 1 - (t1_stop - t1_start))
+                        if t1_stop - t1_start < 1:
+                            time.sleep(1 - (t1_stop - t1_start))
+                    except ValueError as e:
+                        print("What is ths shit" + e)
+                        pass
+                else:
+                    world.wait_for_tick()
+
+                # df = pd.DataFrame(arr)
+                # df.to_csv(f'../vehicle_data_{time.time()}.csv', index=False)
         except Exception as e:
             print(e)
         finally:
+            
+            df = pd.DataFrame(arr)
+            df.to_csv(f'testing_data/vehicle_data_{time.time()}.csv', index=False)
 
             if not self.asynch and synchronous_master:
                 settings = world.get_settings()
